@@ -1,0 +1,494 @@
+<html>
+    <head>
+      <title>Robot</title>
+      <style>
+        :root {
+          --btnw: 400px;
+          --mrgn: 10px;
+        }
+        * {
+          font-family: sans-serif;
+          font-size: 20px;
+        }
+        html, body {
+          margin:10px;
+        }
+        #control {
+          display: block;
+          position: relative;
+          /* width: calc(100% - 2 * var(--mrgn)); */
+          height: calc( var(--btnw) + 70px);
+          /* border: thin solid black; */
+        }
+        .control {
+          display: inline-block;
+          width: var(--btnw);
+          height: var(--btnw);
+          margin: var(--mrgn);
+          background: lightGrey;
+        }
+        .touched {
+          background: pink;
+        }
+        #bluetooth-buttons {
+          position:absolute;
+          display:block;
+          width: calc( 2*var(--btnw) + 5*var(--mrgn) );
+          text-align: center;
+          left:50%;
+          top: 10px;
+          transform:translate(-50%, 0);
+          /* border: 1px solid black; */
+        }
+        button {
+          width: calc( 2*var(--btnw)/3 );
+          height:50px;
+        }
+        #head-buttons {
+          position: absolute;
+          top: 80px;
+          right: 0;
+          width: 80px;
+          height: 400px;
+        }
+        .head-button {
+          display:inline-block;
+          background:lightgray;
+          width:80px;
+          height:190px;
+        }
+        #LR-buttons {
+          position:absolute;
+          display:block;
+          width: calc( 2*var(--btnw) + 5*var(--mrgn) );
+          top: 70px;
+          left: 0;
+          /* border:1px solid red; */
+        }
+        #log {
+          position: absolute;
+          top: 510px;
+        }
+        input {
+          width: calc( 100% - 2 * var(--mrgn) );
+          margin: var(--mrgn);
+          -webkit-appearance: none;
+          appearance: none;
+          background: lightGrey;
+          height: 100px;
+        }
+        video {
+          width: 100%;
+          height: calc(100% - var(--btnw) - 200px);
+          border: thin solid grey;
+          background: lightGrey;
+          margin-top: 60px;
+        }
+      </style>
+    </head>
+    <body>
+      <div style="position:relative">
+        <div id="control">
+          <div id="bluetooth-buttons">
+            <button onclick="requestBluetoothDevice()">Pair</button>
+            <button onclick="connect()">Connect</button>
+            <button onclick="disconnect()">Disconnect</button>  
+          </div>
+          <div id="head-buttons">
+            <div id="btn-head-up" class="head-button"></div>
+            <div id="btn-head-down" class="head-button" style="margin-top:20px"></div>
+          </div>
+          <div id="LR-buttons">
+            <canvas id="btn-left" width="400px" height="400px" class="control"></canvas>
+            <canvas id="btn-right" width="400px" height="400px" class="control"></canvas>
+          </div>
+        </div>  
+      </div>
+
+      <div id="log">
+        <span id="distance">0 cm</span>
+      </div>
+
+      <video src="" id="video"></video>
+      <script src="/node_modules/simple-peer/simplepeer.min.js"></script>
+      <script src="bleio.js"></script>
+      <script src="webrtc.js"></script>
+
+      <!-- handle socket messages -->
+      <script>
+main((msg) => {
+  const data = JSON.parse(msg.data);
+  switch (data.type) {
+    case "signal": {
+      const signal = JSON.parse(data.msg);
+      setTimeout(() => {
+        peer.signal(signal);
+      }, 2000);
+      break;
+    }
+    case "wheels":
+      switch(data.msg) {
+        case "leftOn":
+          document.querySelector("#btn-left").classList.add('touched');
+          leftOn = true;
+          socketControlWheels();
+          break;
+        case "leftOff":
+          document.querySelector("#btn-left").classList.remove('touched');
+          leftOn = false;
+          socketControlWheels();
+          break;
+        case "rightOn":
+          document.querySelector("#btn-right").classList.add('touched');
+          rightOn = true;
+          socketControlWheels();
+          break;
+        case "rightOff":
+          document.querySelector("#btn-right").classList.remove('touched');
+          rightOn = false;
+          socketControlWheels();
+          break;
+      }
+      break;
+    case "head":
+      switch(data.msg) {
+        case "up":
+          document.querySelector("#btn-head-up").classList.add('touched');
+          headUpOn();
+          break;
+        case "down":
+          document.querySelector("#btn-head-down").classList.add('touched');
+          headDownOn();
+          break;
+        case "off":
+          document.querySelector("#btn-head-up").classList.remove('touched');
+          document.querySelector("#btn-head-down").classList.remove('touched');
+          headOff();
+          break;
+      }
+      break;
+    case "speed":
+      speed = parseInt(data.msg);
+      break;
+    default:
+      console.log("UNKNOWN MESSAGE:", data);
+      break;
+  }
+});
+      </script>
+
+      <!-- handle UI events -->
+      <script>
+let [leftOn, rightOn, speed] = [false, false, 10];
+let [X, Y, Rot] = [0, 0, 0];
+let H = 0;
+let wheelsVal0 = -1;
+let headVal0 = -1;
+let headTimer = null;
+const stack = [];
+
+/** Execute BLE commands in sequence: Used only by push() */
+const _executeBLE = async (val) => {
+  await writeToBluetooth(val);
+
+  stack.shift();
+  if(stack.length) {
+    try {
+      await _executeBLE(stack[0]);
+    } catch (e) {
+      console.error(e);
+    }
+  }
+};
+
+/** Push a command to the stack */
+let push = async (val) => {
+  stack.push(val);
+
+  // The first time push is called the stack is empty and _executeBLE is called.
+  // If push is called again before _executeBLE is done, a second call to _executeBLE is not made.
+  // Within _executeBLE, the stack is shifted and if it is not empty, _executeBLE is called again.
+  if (stack.length === 1) {
+      _executeBLE(val);
+  }
+};
+
+const pushWheelsCommand = async () => {
+  if (!myServer) {
+      return;
+  }
+
+  const WHEEL_RADIUS = 2;
+  const WHEEL_GEOMETRY = 1;
+  const frontLeft = Math.round((X - Y - Rot * WHEEL_GEOMETRY) / WHEEL_RADIUS)
+  const frontRight = Math.round((X + Y + Rot * WHEEL_GEOMETRY) / WHEEL_RADIUS)
+  const backLeft = Math.round((X + Y - Rot * WHEEL_GEOMETRY) / WHEEL_RADIUS)
+  const backRight = Math.round((X - Y + Rot * WHEEL_GEOMETRY) / WHEEL_RADIUS)
+
+  const wheelsVal = `w${frontLeft},${frontRight},${backLeft},${backRight}.`;
+  if (wheelsVal === wheelsVal0) {
+    return;
+  }
+  console.log(`wheels: ${wheelsVal}`);
+  wheelsVal0 = wheelsVal;
+  push(wheelsVal);
+};
+
+const pushHeadCommand = async () => {
+  if (!myServer) {
+      return;
+  }
+
+  const headVal = `h${H}`;
+  if (headVal === headVal0) {
+    return;
+  }
+  console.log(`head: ${headVal}`);
+  headVal0 = headVal;
+  push(headVal);
+};
+
+/*
+Configure UI
+*/
+
+const socketControlWheels = (msg) => {
+  console.log("socketControlWheels");
+  if (rightOn && leftOn) {
+    console.log("fwd");
+    push("w80,80,80,80.");
+  }
+  
+  if (leftOn && !rightOn) {
+    console.log("left");
+    X = 0;
+    Y = 0;
+    Rot = 150;
+    pushWheelsCommand();
+  }
+  
+  if (rightOn && !leftOn) {
+    console.log("right");
+    X = 0;
+    Y = 0;
+    Rot = -150;
+    pushWheelsCommand();
+  }
+  
+  if (!rightOn && !leftOn) {
+    console.log("stop");
+    X = 0;
+    Y = 0;
+    Rot = 0;
+    pushWheelsCommand();
+  }
+};
+
+const headUpOn = () => {
+  if (headTimer) {
+    clearInterval(headTimer);
+  }
+  headTimer = setInterval(() => {
+    H += 10;
+    if (H >= 180) {
+      H = 180;
+    }
+    pushHeadCommand();
+  }, 100);
+};
+const headDownOn = () => {
+  if (headTimer) {
+    clearInterval(headTimer);
+  }
+  headTimer = setInterval(() => {
+    H -= 10;
+    if (H <= 0) {
+      H = 0;
+    }
+    pushHeadCommand();
+  }, 100);
+};
+const headOff = () => {
+  clearInterval(headTimer);
+  headTimer = null;
+};
+
+const socketControlHead = (msg) => {
+  console.log("socketControlHead");
+  if (msg === "up") {
+    headUpOn();
+  }
+  if (msg === "down") {
+    headDownOn();
+  }
+  if (msg === "off") {
+    headOff();
+  }
+};
+
+// wheel button handlers
+const btnLeftOn = (ev) => {
+    document.querySelector("#btn-left").classList.add('touched');
+    leftOn = true;
+
+    const bbox = document.querySelector("#btn-left").getBoundingClientRect();
+    const x = ev.touches[0].clientX - bbox.left;
+    const y = ev.touches[0].clientY - bbox.top;
+    const canvas = document.querySelector("#btn-left");
+    const ctx = canvas.getContext('2d');
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    ctx.beginPath();
+    ctx.arc(canvas.width/2, canvas.height/2, 200, 0, 2 * Math.PI);
+    ctx.fillStyle = 'lightGrey';
+    ctx.fill();
+    ctx.closePath();
+
+    ctx.beginPath();
+    ctx.arc(x, y, 10, 0, 2 * Math.PI);
+    ctx.fillStyle = 'black';
+    ctx.fill();
+    ctx.closePath();
+
+    ctx.beginPath();
+    ctx.lineWidth = 5;
+    ctx.moveTo(canvas.width/2, canvas.height/2);
+    ctx.lineTo(x, y);
+    ctx.stroke();
+    ctx.lineWidth = 1;
+    ctx.moveTo(canvas.width/2, y);
+    ctx.lineTo(canvas.width/2, canvas.height/2);
+    ctx.lineTo(x, canvas.height/2);
+    ctx.stroke();
+    ctx.closePath();
+
+    ctx.font = "30px Arial";
+    const dx = x - canvas.width/2;
+    const dy = canvas.height/2 - y;
+    ctx.textAlign = (dx>0)?"left":"right";
+    ctx.fillText(`${~~dx}`, x, canvas.height/2);
+    ctx.textAlign = (dy>0)?"bottom":"top";
+    ctx.fillText(`${~~dy}`, canvas.width/2, y);
+
+    Y = -dx;
+    X = dy;
+    pushWheelsCommand();
+};
+const btnLeftOff = (ev) => {
+    document.querySelector("#btn-left").classList.remove('touched');
+    leftOn = false;
+
+    X = 0;
+    Y = 0;
+    Rot = 0;
+    pushWheelsCommand();
+};
+const btnRightOn = (ev) => {
+    document.querySelector("#btn-right").classList.add('touched');
+    rightOn = true;
+
+    const bbox = document.querySelector("#btn-right").getBoundingClientRect();
+    const canvas = document.querySelector("#btn-right");
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    ctx.beginPath();
+    ctx.arc(canvas.width/2, canvas.height/2, 200, 0, 2 * Math.PI);
+    ctx.fillStyle = 'lightGrey';
+    ctx.fill();
+    ctx.closePath();
+
+    const x = ev.touches[0].clientX - bbox.left;
+    const y = ev.touches[0].clientY - bbox.top;
+    const dx = x - canvas.width/2;
+    const dy = y - canvas.height/2;
+    const n = (dx**2 + dy**2)**0.5;
+    const nx = 120*dx/n;
+    const ny = 120*dy/n;
+    const angle = Math.atan2(dx, -dy);
+
+    ctx.beginPath();
+    ctx.arc(canvas.width/2 + nx, canvas.height/2 + ny, 10, 0, 2 * Math.PI);
+    ctx.fillStyle = 'black';
+    ctx.fill();
+    ctx.closePath();
+
+    ctx.beginPath();
+    ctx.lineWidth = 5;
+    ctx.moveTo(canvas.width/2, canvas.height/2);
+    ctx.lineTo(canvas.width/2 + nx, canvas.height/2 + ny);
+    ctx.stroke();
+    ctx.lineWidth = 1;
+    ctx.arc(canvas.width/2, canvas.height/2, 120, -Math.PI/2+angle, -Math.PI/2, dx>0);
+    ctx.stroke();
+    ctx.closePath();
+
+    ctx.font = "30px Arial";
+    ctx.textAlign = (dx>0)?"left":"right";
+    ctx.fillText(`${~~(-angle*180/Math.PI)}º`, canvas.width/2 + 130*dx/n, canvas.height/2 + 130*dy/n);
+
+    Rot = angle * 180 / Math.PI;
+    pushWheelsCommand();
+};
+const btnRightOff = (ev) => {
+    document.querySelector("#btn-right").classList.remove('touched');
+    rightOn = false;
+
+    Rot = 0;
+    pushWheelsCommand();
+};
+
+// head button handlers
+const btnHeadUpOn = (ev) => {
+  document.querySelector("#btn-head-up").classList.add('touched');
+  headUpOn();
+};
+const btnHeadDownOn = (ev) => {
+  document.querySelector("#btn-head-down").classList.add('touched');
+  headDownOn();
+};
+const btnHeadOff = (ev) => {
+  document.querySelector("#btn-head-up").classList.remove('touched');
+  document.querySelector("#btn-head-down").classList.remove('touched');
+  headOff();
+};
+
+// wheels
+document.querySelector("#btn-left").addEventListener('touchstart', (ev) => {
+  ev.preventDefault();
+  btnLeftOn(ev);
+});
+document.querySelector("#btn-left").addEventListener('touchend', (ev) => {
+  ev.preventDefault();
+  btnLeftOff(ev);
+});
+document.querySelector("#btn-right").addEventListener('touchstart', (ev) => {
+  ev.preventDefault();
+  btnRightOn(ev);
+});
+document.querySelector("#btn-right").addEventListener('touchend', (ev) => {
+  ev.preventDefault();
+  btnRightOff(ev);
+});
+
+// head
+document.querySelector("#btn-head-up").addEventListener('touchstart', (ev) => {
+  ev.preventDefault();
+  btnHeadUpOn(ev);
+});
+document.querySelector("#btn-head-up").addEventListener('touchend', (ev) => {
+  ev.preventDefault();
+  btnHeadOff(ev);
+});
+document.querySelector("#btn-head-down").addEventListener('touchstart', (ev) => {
+  ev.preventDefault();
+  btnHeadDownOn(ev);
+});
+document.querySelector("#btn-head-down").addEventListener('touchend', (ev) => {
+  ev.preventDefault();
+  btnHeadOff(ev);
+});
+      </script>
+    </body>
+</html>

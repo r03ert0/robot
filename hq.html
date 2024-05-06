@@ -1,0 +1,111 @@
+<html>
+  <head>
+    <style>
+      body {
+        font-family: sans-serif;
+      }
+      #video {
+        width: 100%;
+        border: thin solid grey;
+        background: lightGrey;
+      }
+    </style>
+  </head>
+
+  <body>
+    <video src="" id="video"></video>
+    <canvas src="" id="image"></canvas>
+
+    <p>
+      Use the arrow keys to control the robot:<br />
+      &nbsp;&nbsp;&nbsp;&nbsp;Up: Head up<br />
+      &nbsp;&nbsp;&nbsp;&nbsp;Down: Head down<br />
+      &nbsp;&nbsp;&nbsp;&nbsp;Left: Left motor on<br />
+      &nbsp;&nbsp;&nbsp;&nbsp;Right: Right motor on<br />
+    </p>
+
+    <script src="/node_modules/simple-peer/simplepeer.min.js"></script>
+    <script src="webrtc.js"></script>
+    <script>
+      main((msg) => {
+        const data = JSON.parse(msg.data);
+        switch (data.type) {
+            case "signal": {
+                const signal = JSON.parse(data.msg);
+                setTimeout(() => {
+                    peer.signal(signal);
+                }, 2000);
+                break;
+            }
+            default:
+                console.log("UNKNOWN MESSAGE:", data);
+                break;
+        }
+    });
+    </script>
+    <script>
+let speed = 0;
+let keyup = {
+  ArrowRight: true,
+  ArrowLeft: true,
+  ArrowUp: true,
+  ArrowDown: true
+};
+
+const handleKeyDown = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (keyup[e.code] === false) {
+        return;
+    }
+
+    switch(e.code) {
+        case "ArrowUp":
+            socket.send(JSON.stringify({type:"head", msg: "up"}));
+            break;
+        case "ArrowDown":
+            socket.send(JSON.stringify({type:"head", msg: "down"}));
+            break;
+        case "ArrowRight":
+            socket.send(JSON.stringify({type:"wheels", msg: "leftOn"}));
+            break;
+        case "ArrowLeft":
+            socket.send(JSON.stringify({type:"wheels", msg: "rightOn"}));
+            break;
+        default:
+            return;
+    }
+    keyup[e.code] = false;
+};
+
+const handleKeyUp = async (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  switch(e.code) {
+      case "ArrowRight":
+        socket.send(JSON.stringify({type:"wheels", msg: "leftOff"}));
+        break;
+      case "ArrowLeft":
+        socket.send(JSON.stringify({type:"wheels", msg: "rightOff"}));
+        break;
+      case "ArrowUp":
+        socket.send(JSON.stringify({type:"head", msg: "off"}));
+        break;
+      case "ArrowDown":
+        socket.send(JSON.stringify({type:"head", msg: "off"}));
+        break;
+        break;
+      default:
+        return;
+    }
+    keyup[e.code] = true;
+};
+
+document.body.addEventListener('keydown', handleKeyDown);
+document.body.addEventListener('keypressed', handleKeyDown);
+document.body.addEventListener('keyup', handleKeyUp);
+
+</script>
+  </body>
+</html>

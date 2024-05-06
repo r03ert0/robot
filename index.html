@@ -1,0 +1,41 @@
+<html>
+    <body>
+        <style>
+            .box {
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                width: calc(100% - 60px);
+                height: 80px;
+                background: lightGrey;
+                padding: 10px;
+                margin: 20px;
+                border: thin solid grey;
+                font-size: 40px;
+                font-family: sans-serif;
+                cursor: pointer;
+            }
+            </style>
+            
+            <div id="hq" class="box">
+                HQ
+            </div>
+            <div id="ae" class="box">
+                AE
+            </div>
+            <div id="robot" class="box">
+                Robot
+            </div>
+            <script>
+            document.querySelector("#hq").addEventListener("click", function() {
+                window.location.href = "/hq.html#hq";
+            });
+            document.querySelector("#ae").addEventListener("click", function() {
+                window.location.href = "/ae.html#hq";
+            });
+            document.querySelector("#robot").addEventListener("click", function() {
+                window.location.href = "/robot.html";
+            });
+            </script>            
+    </body>
+</html>
